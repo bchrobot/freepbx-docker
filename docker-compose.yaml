@@ -25,7 +25,7 @@ secrets:
 services:
   db:
     restart: always
-    image: mariadb:10.11
+    image: mariadb:10.11.19@sha256:0d0945c57f75b3a3b9ebe71aedaaad005fa5305054e8fca3d2e42a8c92b43b5e
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
       MYSQL_USER: freepbxuser
@@ -43,7 +43,9 @@ services:
 
   freepbx:
     restart: always
-    image: escomputers/freepbx:17-nofail2ban
+    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker:latest}
+    build:
+      context: ./source
     volumes:
       - var_data:/var
       - etc_data:/etc
@@ -61,7 +63,7 @@ services:
 
   fail2ban:
     restart: unless-stopped
-    image: lscr.io/linuxserver/fail2ban:latest
+    image: lscr.io/linuxserver/fail2ban:1.1.0@sha256:6d04e983661436f0080675a5b8cbecf07e00126266edd12b5a8c1fa49c8ecec0
     container_name: fail2ban
     network_mode: host
     cap_add:

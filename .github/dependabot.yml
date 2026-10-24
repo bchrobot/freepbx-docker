@@ -1,0 +1,28 @@
+# Dependabot covers base images (Dockerfile FROM), compose images and GitHub Actions.
+# Everything it cannot see (apt packages, Asterisk/FreePBX tarballs, runtime FreePBX
+# modules) is covered by rebuild.yml, upstream-bump.yml and advisory-watch.yml.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /source
+    schedule:
+      interval: weekly
+    groups:
+      docker-images:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      compose-images:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        update-types: [minor, patch]
