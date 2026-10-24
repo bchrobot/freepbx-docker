@@ -83,6 +83,19 @@ if [[ -n "${FREEPBX_NOTIFICATION_EMAIL:-}" ]]; then
   "$FWCONSOLE" updatemanager notification_emails "$FREEPBX_NOTIFICATION_EMAIL"
 fi
 
+# The RTP range has to match what the host forwards (run.sh), so the environment
+# wins over the GUI setting.
+if [[ -n "${RTP_START:-}" && -n "${RTP_END:-}" ]]; then
+  log "RTP port range ${RTP_START}-${RTP_END}"
+  php -r '
+    $bootstrap_settings["freepbx_auth"] = false;
+    include "/etc/freepbx.conf";
+    $sipsettings = \FreePBX::Sipsettings();
+    $sipsettings->setConfig("rtpstart", (int) getenv("RTP_START"));
+    $sipsettings->setConfig("rtpend", (int) getenv("RTP_END"));
+  '
+fi
+
 "$FWCONSOLE" chown
 # fwconsole chown does not follow the /etc/{freepbx,amportal}.conf symlinks
 chown -R asterisk:asterisk /var/lib/freepbx
