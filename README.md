@@ -72,13 +72,12 @@ chmod 600 mysql_root_password.txt freepbxuser_password.txt sasl_passwd.txt
 
 2. To complete postfix configuration, set the `relayhost` in [postfix/main.cf](source/postfix/main.cf) to match your SMTP server defined in `sasl_passwd.txt`. 
 
-3. OPTION A: build the image from scratch:
+3. OPTION A: build the image locally:
 ```bash
-cd source && sudo docker build -t your-image-name:your-tag .
+sudo docker compose build freepbx
 ```
-Then edit the value of `services.freepbx.image` in the [docker-compose.yaml](docker-compose.yaml) by setting the proper image version and tag.
 
-3. OPTION B: if you want to use the pre-built image on Docker Hub, jump to the next step directly
+3. OPTION B: use the image published by CI to `ghcr.io/bchrobot/freepbx-docker:latest` (rebuilt weekly with the latest Debian security fixes). Set `FREEPBX_IMAGE` to use a different image, then jump to the next step
 
 4. Configure RTP ports on the host and build + run the Compose project:
 ```bash
@@ -102,6 +101,11 @@ sudo docker compose exec -it freepbx certbot --apache -d your.domain.com --email
 ```
 
 Login to the web server's admin URL and start configuring the system!
+
+## Security updates
+- **Dependabot** opens PRs for base images, compose images and GitHub Actions. All are pinned by tag and digest.
+- **CI** (`.github/workflows/build.yml`) scans every image with Trivy, uploads the results to the repository's Security tab, and attaches an SBOM.
+- **Weekly rebuild** (`.github/workflows/rebuild.yml`) rebuilds from scratch so Debian package fixes (PHP, Apache, ...) land. It republishes the image and opens a `security` issue if fixable HIGH/CRITICAL findings remain.
 
 
 **If you find this project useful or inspiring**
