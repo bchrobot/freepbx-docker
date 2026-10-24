@@ -5,8 +5,8 @@
 # state are shared through named volumes.
 
 x-db-env: &db-env
-  DB_HOST: db
-  DB_PORT: "3306"
+  DB_HOST: ${DB_HOST:-db}
+  DB_PORT: ${DB_PORT:-3306}
   DB_NAME: asterisk
   CDR_DB_NAME: asteriskcdrdb
   DB_USER: freepbxuser
@@ -36,6 +36,8 @@ volumes:
   freepbx_crontabs:
   freepbx_run:
   smtp_spool:
+  caddy_data:
+  caddy_config:
 
 networks:
   defaultnet:
@@ -45,8 +47,8 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.18.0.0/16
-          gateway: 172.18.0.1
+        - subnet: ${PBX_SUBNET:-172.18.0.0/16}
+          gateway: ${PBX_GATEWAY:-172.18.0.1}
 
 secrets:
   mysql_root_password:
@@ -81,7 +83,6 @@ services:
       start_period: 30s
     networks:
       defaultnet:
-        ipv4_address: 172.18.0.10
 
   # Holds the shared network namespace (IP, published ports) for the PBX containers.
   pbx-net:
@@ -89,10 +90,10 @@ services:
     image: registry.k8s.io/pause:3.10.1@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
     networks:
       defaultnet:
-        ipv4_address: 172.18.0.20
+        # Fixed so run.sh can DNAT the RTP port range to it
+        ipv4_address: ${PBX_IP:-172.18.0.20}
         aliases: [asterisk, freepbx]
     ports:
-      - "80:80/tcp"
       - "5060:5060/udp"
 
   asterisk:
@@ -133,6 +134,8 @@ services:
       <<: *db-env
       FREEPBX_AUTO_UPGRADE: ${FREEPBX_AUTO_UPGRADE:-false}
       FREEPBX_NOTIFICATION_EMAIL: ${FREEPBX_NOTIFICATION_EMAIL:-}
+      RTP_START: ${RTP_START:-16384}
+      RTP_END: ${RTP_END:-32767}
     secrets:
       - freepbxuser_password
       - ami_password
@@ -211,17 +214,37 @@ services:
       context: ./source
       target: smtp
     environment:
-      RELAYHOST: ${SMTP_RELAYHOST:?set SMTP_RELAYHOST in .env, e.g. [smtp.gmail.com]:587}
+      # smtp exits with an error until this is set in .env
+      RELAYHOST: ${SMTP_RELAYHOST:-}
       RELAYHOST_USERNAME: ${SMTP_RELAY_USER:-}
       RELAYHOST_PASSWORD_FILE: /run/secrets/smtp_password
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:-freepbx.localdomain}
-      MYNETWORKS: 127.0.0.0/8 172.18.0.0/16
+      MYNETWORKS: 127.0.0.0/8 ${PBX_SUBNET:-172.18.0.0/16}
     secrets:
       - smtp_password
     volumes:
       - smtp_spool:/var/spool/postfix
     networks:
       defaultnet:
+
+  # TLS edge for the web UI; replaceable by a cloud load balancer.
+  proxy:
+    restart: always
+    image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      defaultnet:
+    depends_on:
+      freepbx:
+        condition: service_healthy
 
   fail2ban:
     restart: unless-stopped

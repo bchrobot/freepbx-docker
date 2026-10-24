@@ -124,6 +124,8 @@ ARG FREEPBX_VERSION=17.0.33
 ARG FREEPBX_SHA256=57bfe353de693cd9f0f03b4e6cda68da69fd39c4beb9506fc06c8814ec40e538
 ARG FREEPBX_MIRROR_REPO=bchrobot/freepbx-docker
 
+COPY apache/remoteip.conf /etc/apache2/conf-available/freepbx-remoteip.conf
+
 RUN apt-get update \
   && apt-get -y install --no-install-recommends \
     apache2 libapache2-mod-php8.2 mariadb-client lame ffmpeg sqlite3 \
@@ -137,7 +139,8 @@ RUN apt-get update \
   && sed -i 's/^\(User\|Group\).*/\1 asterisk/' /etc/apache2/apache2.conf \
   && sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf \
   && echo "ServerName localhost" >> /etc/apache2/apache2.conf \
-  && a2enmod rewrite \
+  && a2enmod rewrite remoteip \
+  && a2enconf freepbx-remoteip \
   && apache2ctl -t \
   && rm -f /var/www/html/index.html \
   && ln -sf /dev/stdout /var/log/apache2/access.log \

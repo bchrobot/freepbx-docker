@@ -7,8 +7,15 @@ get_default_iface() {
     | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}'
 }
 
-freepbxip="172.18.0.20"
-rtp_port_range="16384-32767"
+# Settings shared with docker-compose.yaml
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+pbx_ip="${PBX_IP:-172.18.0.20}"
+rtp_port_range="${RTP_START:-16384}-${RTP_END:-32767}"
 DEFAULT_IFACE="$(get_default_iface)"
 
 if [[ -z "$DEFAULT_IFACE" ]]; then
@@ -44,6 +51,10 @@ if [[ -n "$requested_rtp" ]]; then
     end_port="${requested_rtp##*-}"
     if (( end_port > start_port )); then
       rtp_port_range="$requested_rtp"
+      # Persist for compose: freepbx-init configures Asterisk with the same range
+      touch .env
+      sed -i.bak -e '/^RTP_START=/d' -e '/^RTP_END=/d' .env && rm -f .env.bak
+      printf 'RTP_START=%s\nRTP_END=%s\n' "$start_port" "$end_port" >> .env
     else
       echo "ERROR: Invalid --rtp value '$requested_rtp'. The right number must be greater than the left (e.g., 10000-20000)." >&2
       exit 1
@@ -80,8 +91,8 @@ else
 
         # Allow incoming UDP traffic to container on the RTP port range on the DOCKER-USER chain 
         # to ensure media packets are accepted before other rules are applied.
-        if ! sudo iptables -C DOCKER-USER -p udp -d "$freepbxip" --dport "${rtp_port_range/-/:}" -j ACCEPT 2>/dev/null; then
-            sudo iptables -I DOCKER-USER -p udp -d "$freepbxip" --dport "${rtp_port_range/-/:}" -j ACCEPT \
+        if ! sudo iptables -C DOCKER-USER -p udp -d "$pbx_ip" --dport "${rtp_port_range/-/:}" -j ACCEPT 2>/dev/null; then
+            sudo iptables -I DOCKER-USER -p udp -d "$pbx_ip" --dport "${rtp_port_range/-/:}" -j ACCEPT \
             && echo "Rule for incoming RTP traffic added!"
         else
             echo "Rule for incoming RTP traffic already in place."
@@ -90,9 +101,9 @@ else
         # Destination NAT for RTP: forward inbound UDP traffic arriving on the default egress interface
         # and matching the RTP port range to the FreePBX host.
         if ! sudo iptables -t nat -C PREROUTING -i "$DEFAULT_IFACE" -p udp --dport "${rtp_port_range/-/:}" \
-            -j DNAT --to-destination "$freepbxip:${rtp_port_range/:/-}" 2>/dev/null; then
+            -j DNAT --to-destination "$pbx_ip:${rtp_port_range/:/-}" 2>/dev/null; then
             sudo iptables -t nat -A PREROUTING -i "$DEFAULT_IFACE" -p udp --dport "${rtp_port_range/-/:}" \
-            -j DNAT --to-destination "$freepbxip:${rtp_port_range/:/-}" && echo "Rule for Destination NAT RTP added!"
+            -j DNAT --to-destination "$pbx_ip:${rtp_port_range/:/-}" && echo "Rule for Destination NAT RTP added!"
         else
             echo "Rule for Destination NAT RTP already in place."
         fi

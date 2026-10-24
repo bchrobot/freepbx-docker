@@ -1,0 +1,11 @@
+# Edge proxy for the FreePBX web UI. With DOMAIN set to a public name, Caddy gets and
+# renews a Let's Encrypt certificate; for localhost it uses its own local CA.
+# A cloud load balancer can replace this service: it only needs these two routes.
+
+{$DOMAIN:localhost} {
+	# Asterisk's HTTP server: WebRTC websocket
+	@websocket path /ws
+	reverse_proxy @websocket asterisk:8088
+
+	reverse_proxy freepbx:80
+}
