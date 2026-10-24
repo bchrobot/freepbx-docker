@@ -76,8 +76,9 @@ chmod 600 mysql_root_password.txt freepbxuser_password.txt sasl_passwd.txt
 ```bash
 sudo docker compose build freepbx
 ```
+`source/Dockerfile` has several targets: `asterisk`, `freepbx`, and the legacy single-container `allinone` that compose currently uses. Builds work natively on both amd64 and arm64.
 
-3. OPTION B: use the image published by CI to `ghcr.io/bchrobot/freepbx-docker:latest` (rebuilt weekly with the latest Debian security fixes). Set `FREEPBX_IMAGE` to use a different image, then jump to the next step
+3. OPTION B: use the image published by CI to `ghcr.io/bchrobot/freepbx-docker/allinone:latest` (rebuilt weekly with the latest Debian security fixes). Set `FREEPBX_IMAGE` to use a different image, then jump to the next step
 
 4. Configure RTP ports on the host and build + run the Compose project:
 ```bash

@@ -43,9 +43,10 @@ services:
 
   freepbx:
     restart: always
-    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker:latest}
+    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker/allinone:latest}
     build:
       context: ./source
+      target: allinone
     volumes:
       - var_data:/var
       - etc_data:/etc
