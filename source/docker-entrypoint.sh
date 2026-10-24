@@ -44,6 +44,12 @@ ODBC_DRIVER_PATH="$(dpkg -L odbc-mariadb | grep -m1 '/libmaodbc\.so$')"
 render odbcinst.ini.tmpl /etc/odbcinst.ini
 render odbc.ini.tmpl /etc/odbc.ini
 
+# sendmail (msmtp) for voicemail-to-email and PHP mail(), via the smtp container
+export SMTP_HOST="${SMTP_HOST:-smtp}"
+export SMTP_PORT="${SMTP_PORT:-25}"
+export SMTP_FROM="${SMTP_FROM:-freepbx@freepbx.localdomain}"
+render msmtprc.tmpl /etc/msmtprc
+
 # The FreePBX installer writes the first freepbx.conf itself and treats one without
 # amportal.conf as a half-finished install, so only render it once installed.
 # Containers that mount the FreePBX config volume read-only (asterisk) only read it.

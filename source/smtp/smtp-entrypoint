@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Configures Postfix as a send-only relay from environment variables and secrets,
+# then execs the command (postfix start-fg).
+set -euo pipefail
+
+: "${RELAYHOST:?RELAYHOST must be set, e.g. [smtp.gmail.com]:587}"
+
+postconf -e \
+  "myhostname=${MAIL_HOSTNAME:-freepbx.localdomain}" \
+  "myorigin=\$myhostname" \
+  "mydestination=" \
+  "relayhost=${RELAYHOST}" \
+  "inet_interfaces=all" \
+  "inet_protocols=ipv4" \
+  "mynetworks=${MYNETWORKS:-127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}" \
+  "smtpd_relay_restrictions=permit_mynetworks, reject" \
+  "smtp_tls_security_level=${SMTP_TLS_SECURITY_LEVEL:-encrypt}" \
+  "smtp_tls_CAfile=/etc/ssl/certs/ca-certificates.crt" \
+  "maillog_file=/dev/stdout" \
+  "compatibility_level=3.6"
+
+if [[ -n "${RELAYHOST_USERNAME:-}" ]]; then
+  password="${RELAYHOST_PASSWORD:-}"
+  if [[ -n "${RELAYHOST_PASSWORD_FILE:-}" ]]; then
+    password="$(<"$RELAYHOST_PASSWORD_FILE")"
+  fi
+  install -m 0600 /dev/null /etc/postfix/sasl_passwd
+  printf '%s %s:%s\n' "$RELAYHOST" "$RELAYHOST_USERNAME" "$password" >/etc/postfix/sasl_passwd
+  postconf -e \
+    "smtp_sasl_auth_enable=yes" \
+    "smtp_sasl_password_maps=texthash:/etc/postfix/sasl_passwd" \
+    "smtp_sasl_security_options=noanonymous" \
+    "smtp_sasl_tls_security_options=noanonymous"
+fi
+
+# Debian runs smtp(8) chrooted, which needs copies of resolv.conf etc. Not worth it in a
+# single-purpose container.
+postconf -F '*/*/chroot = n'
+
+exec "$@"

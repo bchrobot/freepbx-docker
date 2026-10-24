@@ -20,3 +20,5 @@ source/*.tgz
 
 # Built Visual Studio Code Extensions
 *.vsix
+# Local settings
+.env

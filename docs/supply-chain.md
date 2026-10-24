@@ -11,6 +11,8 @@ Every dependency has to be auditable, and its fixes have to arrive without someo
 | Asterisk | Source tarball from `github.com/asterisk/asterisk` releases, sha256-pinned | `upstream-bump.yml` (follows the 22 LTS line) | `advisory-watch.yml` (Asterisk GHSAs) |
 | Asterisk mp3 addon | `svn export -r <rev>` from svn.digium.com, tree-hash pinned | Manual. The code has been static for years. | None. It is a third-party decoder with no advisory feed. |
 | FreePBX core tarball | Sangoma's `freepbx-17.0-latest.tgz`, mirrored as a release asset here, sha256-pinned | `upstream-bump.yml` (detects a new tarball by checksum) | Trivy (vendored composer/npm lockfiles) and `advisory-watch.yml` (FreePBX GHSAs) |
+| supercronic (cron container) | Release binary, sha256-pinned per architecture | `upstream-bump.yml` | Trivy (Go binary metadata) |
+| Postfix relay (smtp container) | Debian `postfix` on the pinned Debian base | Dependabot (base image), weekly rebuild | Trivy image scan |
 | npm packages that UCP/pm2 install at FreePBX install time | `npm install` into the webroot volume | FreePBX module updates | None. They live in a volume outside the image. |
 | FreePBX modules installed or upgraded at runtime | `fwconsole ma`, stored in a volume | FreePBX module updates | `advisory-watch.yml`. No image scanner can see this code. |
 
@@ -21,6 +23,10 @@ Every dependency has to be auditable, and its fixes have to arrive without someo
 - **Asterisk sounds:** `make install` downloads the core and MOH sound archives from downloads.asterisk.org without a pinned checksum. They are audio files, not code.
 - **Runtime FreePBX modules:** these are the largest gap. Recent critical FreePBX CVEs were in modules, which live in a volume outside the image. Keep module security updates enabled, and act on `upstream-advisory` issues.
 - **Bump PRs and CI:** PRs opened with `GITHUB_TOKEN` don't trigger CI. Set a `BUMP_TOKEN` secret so the build check runs on bump PRs.
+
+## Decision: our own smtp image instead of `boky/postfix`
+
+`boky/postfix` is actively developed, but its tagged release images are not rebuilt between releases. Scanned in October 2026, `boky/postfix:5.1.0` (January 2026) had 207 fixable HIGH/CRITICAL findings, and the rolling `edge` tag had 16. A plain Debian `postfix` on our pinned base image gets Dependabot base bumps and the weekly rebuild like every other image here, for about 40 lines of entrypoint.
 
 ## Decision: build Asterisk from source instead of Sangoma's `.deb` packages
 

@@ -65,18 +65,23 @@ printf "yourstrongmysqlfreepbxuserpassword" > freepbxuser_password.txt
 # for the Asterisk Manager Interface login used inside the stack
 openssl rand -hex 24 > ami_password.txt
 
+# for your upstream SMTP server (e.g. a Gmail app password); create it even if unused
+printf "your-smtp-password" > smtp_password.txt
+
 # Set proper file permissions
-chmod 600 mysql_root_password.txt freepbxuser_password.txt ami_password.txt
+chmod 600 mysql_root_password.txt freepbxuser_password.txt ami_password.txt smtp_password.txt
 ```
 Passwords must not contain quote characters.
+
+Then copy `.env.example` to `.env` and set the outbound mail settings (`SMTP_RELAYHOST`, `SMTP_RELAY_USER`, `SMTP_FROM`).
 
 2. OPTION A: build the images locally:
 ```bash
 sudo docker compose build
 ```
-`source/Dockerfile` has one target per service (`asterisk`, `freepbx`). Builds work natively on both amd64 and arm64.
+`source/Dockerfile` has one target per service (`asterisk`, `freepbx`, `cron`, `smtp`). Builds work natively on both amd64 and arm64.
 
-2. OPTION B: use the images published by CI to `ghcr.io/bchrobot/freepbx-docker/{asterisk,freepbx}:latest` (rebuilt weekly with the latest Debian security fixes). Set `ASTERISK_IMAGE` / `FREEPBX_IMAGE` to use different images, then jump to the next step
+2. OPTION B: use the images published by CI to `ghcr.io/bchrobot/freepbx-docker/{asterisk,freepbx,cron,smtp}:latest` (rebuilt weekly with the latest Debian security fixes). Set `ASTERISK_IMAGE` / `FREEPBX_IMAGE` to use different images, then jump to the next step
 
 3. Configure RTP ports on the host and build + run the Compose project. FreePBX is installed automatically on the first start (`freepbx-init`):
 ```bash

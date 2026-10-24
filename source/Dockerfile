@@ -1,6 +1,8 @@
 # Targets:
-#   asterisk  - Asterisk only (runs FreePBX AGI scripts from the shared webroot)
-#   freepbx   - FreePBX web UI on Apache + mod_php; also runs freepbx-init
+#   asterisk  - Asterisk
+#   freepbx   - FreePBX web UI on Apache + mod_php; also runs freepbx-init and fastagi
+#   cron      - FreePBX's scheduled jobs and logrotate (supercronic)
+#   smtp      - send-only Postfix relay
 #
 # Base images are written out literally (not via ARG) so Dependabot can update them.
 
@@ -75,7 +77,7 @@ RUN apt-get update \
     ca-certificates curl tzdata gettext-base procps \
     php8.2-cli php8.2-common php8.2-curl php8.2-mysql php8.2-gd php8.2-mbstring \
     php8.2-intl php8.2-xml php8.2-soap php-pear \
-    unixodbc odbc-mariadb sox mpg123 \
+    unixodbc odbc-mariadb sox mpg123 msmtp-mta \
   && groupadd --gid "${ASTERISK_GID}" asterisk \
   && useradd --system --uid "${ASTERISK_UID}" --gid asterisk --home-dir /var/lib/asterisk --no-create-home asterisk \
   && usermod -aG audio,dialout asterisk \
@@ -173,3 +175,52 @@ RUN set -eux \
   && rm freepbx.tgz
 
 CMD ["apache2-foreground"]
+
+# ---------------------------------------------------------------------------
+FROM freepbx AS cron
+
+# Pinned, checksummed upstream binary. Bumped by .github/workflows/upstream-bump.yml
+ARG SUPERCRONIC_VERSION=v0.2.51
+ARG SUPERCRONIC_SHA256_AMD64=cc232108374e8e2b537045f2d5eaa1229f619db314c3ba6a14d38b35dc0aa123
+ARG SUPERCRONIC_SHA256_ARM64=4ae22576a78223d8ccdf5f3b3660a5cbb5288416bf0ca96afc4a36d195932b94
+
+RUN set -eux \
+  && arch="$(dpkg --print-architecture)" \
+  && case "$arch" in \
+       amd64) sha256="${SUPERCRONIC_SHA256_AMD64}" ;; \
+       arm64) sha256="${SUPERCRONIC_SHA256_ARM64}" ;; \
+       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${arch}" -o /usr/local/bin/supercronic \
+  && echo "${sha256}  /usr/local/bin/supercronic" | sha256sum -c - \
+  && chmod 0755 /usr/local/bin/supercronic \
+  && apt-get update \
+  && apt-get -y install --no-install-recommends logrotate \
+  && rm -rf /var/lib/apt/lists/* \
+  # lets the asterisk user open its own crontab in /var/spool/cron/crontabs
+  && usermod -aG crontab asterisk
+
+COPY cron/logrotate.conf /etc/freepbx-docker/logrotate.conf
+COPY --chmod=0755 cron/cron-scheduler /usr/local/bin/cron-scheduler
+
+CMD ["cron-scheduler"]
+
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS smtp
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN echo "postfix postfix/main_mailer_type select No configuration" | debconf-set-selections \
+  && apt-get update \
+  && apt-get -y install --no-install-recommends postfix libsasl2-modules ca-certificates \
+  && touch /etc/postfix/main.cf \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0755 smtp/smtp-entrypoint /usr/local/bin/smtp-entrypoint
+
+EXPOSE 25
+VOLUME /var/spool/postfix
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/25 && head -1 <&3 | grep -q "^220"' || exit 1
+ENTRYPOINT ["/usr/local/bin/smtp-entrypoint"]
+CMD ["postfix", "start-fg"]
