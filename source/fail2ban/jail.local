@@ -12,7 +12,7 @@ maxretry = 2
 enabled  = true
 backend  = auto
 filter   = asterisk
-logpath  = /remotelogs/freepbx/log/asterisk/full
+logpath  = /remotelogs/asterisk/full
 
 chain    = DOCKER-USER
 action   = iptables-allports[chain=DOCKER-USER, protocol=all]

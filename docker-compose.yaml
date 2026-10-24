@@ -1,7 +1,39 @@
+# One process per container. asterisk, freepbx-init, freepbx and fastagi share one
+# network namespace, owned by the pbx-net pause container exactly like a Kubernetes Pod:
+# FreePBX reaches AMI and Asterisk reaches FastAGI on 127.0.0.1, as on a single host,
+# and any of them can restart without breaking the others' networking. Config and
+# state are shared through named volumes.
+
+x-db-env: &db-env
+  DB_HOST: db
+  DB_PORT: "3306"
+  DB_NAME: asterisk
+  CDR_DB_NAME: asteriskcdrdb
+  DB_USER: freepbxuser
+  DB_PASSWORD_FILE: /run/secrets/freepbxuser_password
+  AMI_USER: freepbx-docker
+  AMI_PASSWORD_FILE: /run/secrets/ami_password
+
+x-freepbx-volumes: &freepbx-volumes
+  - asterisk_etc:/etc/asterisk
+  - asterisk_lib:/var/lib/asterisk
+  - asterisk_spool:/var/spool/asterisk
+  - asterisk_log:/var/log/asterisk
+  - freepbx_web:/var/www/html
+  - freepbx_conf:/var/lib/freepbx
+  - freepbx_crontabs:/var/spool/cron/crontabs
+  - freepbx_run:/var/run/asterisk
+
 volumes:
   mysql_data:
-  var_data:
-  etc_data:
+  asterisk_etc:
+  asterisk_lib:
+  asterisk_spool:
+  asterisk_log:
+  freepbx_web:
+  freepbx_conf:
+  freepbx_crontabs:
+  freepbx_run:
 
 networks:
   defaultnet:
@@ -19,8 +51,8 @@ secrets:
     file: mysql_root_password.txt
   freepbxuser_password:
     file: freepbxuser_password.txt
-  postfix_sasl_passwd:
-    file: sasl_passwd.txt
+  ami_password:
+    file: ami_password.txt
 
 services:
   db:
@@ -37,30 +69,118 @@ services:
       - mysql_data:/var/lib/mysql
       - ./my.cnf:/etc/mysql/my.cnf:ro
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       defaultnet:
         ipv4_address: 172.18.0.10
 
-  freepbx:
+  # Holds the shared network namespace (IP, published ports) for the PBX containers.
+  pbx-net:
     restart: always
-    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker/allinone:latest}
-    build:
-      context: ./source
-      target: allinone
-    volumes:
-      - var_data:/var
-      - etc_data:/etc
+    image: registry.k8s.io/pause:3.10.1@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
     networks:
       defaultnet:
         ipv4_address: 172.18.0.20
+        aliases: [asterisk, freepbx]
     ports:
       - "80:80/tcp"
-      - "443:443/tcp"
       - "5060:5060/udp"
+
+  asterisk:
+    restart: always
+    image: ${ASTERISK_IMAGE:-ghcr.io/bchrobot/freepbx-docker/asterisk:latest}
+    build:
+      context: ./source
+      target: asterisk
+    environment: *db-env
     secrets:
-      - postfix_sasl_passwd
+      - freepbxuser_password
+      - ami_password
+    volumes:
+      - asterisk_etc:/etc/asterisk
+      - asterisk_lib:/var/lib/asterisk
+      - asterisk_spool:/var/spool/asterisk
+      - asterisk_log:/var/log/asterisk
+      # AGI scripts run FreePBX code, read-only
+      - freepbx_web:/var/www/html:ro
+      - freepbx_conf:/var/lib/freepbx:ro
+    network_mode: service:pbx-net
     depends_on:
-      - db
+      pbx-net:
+        condition: service_started
+        restart: true
+      db:
+        condition: service_healthy
+
+  freepbx-init:
+    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker/freepbx:latest}
+    build:
+      context: ./source
+      target: freepbx
+    command: ["freepbx-init"]
+    restart: "no"
+    network_mode: service:pbx-net
+    environment:
+      <<: *db-env
+      FREEPBX_AUTO_UPGRADE: ${FREEPBX_AUTO_UPGRADE:-false}
+      FREEPBX_NOTIFICATION_EMAIL: ${FREEPBX_NOTIFICATION_EMAIL:-}
+    secrets:
+      - freepbxuser_password
+      - ami_password
+    volumes: *freepbx-volumes
+    depends_on:
+      db:
+        condition: service_healthy
+      asterisk:
+        condition: service_healthy
+
+  freepbx:
+    restart: always
+    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker/freepbx:latest}
+    build:
+      context: ./source
+      target: freepbx
+    network_mode: service:pbx-net
+    environment: *db-env
+    secrets:
+      - freepbxuser_password
+      - ami_password
+    volumes: *freepbx-volumes
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/admin/config.php"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+    depends_on:
+      freepbx-init:
+        condition: service_completed_successfully
+
+  # FreePBX's FastAGI server: runs AGI scripts for Asterisk on 127.0.0.1:4573
+  fastagi:
+    restart: always
+    image: ${FREEPBX_IMAGE:-ghcr.io/bchrobot/freepbx-docker/freepbx:latest}
+    build:
+      context: ./source
+      target: freepbx
+    command: ["fastagi"]
+    network_mode: service:pbx-net
+    environment: *db-env
+    secrets:
+      - freepbxuser_password
+      - ami_password
+    volumes: *freepbx-volumes
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4573"]
+      interval: 30s
+      timeout: 5s
+    depends_on:
+      freepbx-init:
+        condition: service_completed_successfully
 
   fail2ban:
     restart: unless-stopped
@@ -75,8 +195,8 @@ services:
       PGID: 2000
       TZ: UTC
     volumes:
-      - var_data:/remotelogs/freepbx:ro
+      - asterisk_log:/remotelogs/asterisk:ro
       - ./source/fail2ban/jail.local:/config/fail2ban/jail.local
       - ./source/fail2ban/filter.d/asterisk.conf:/config/fail2ban/filter.d/asterisk.conf
     depends_on:
-      - freepbx
+      - asterisk

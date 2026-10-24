@@ -23,8 +23,10 @@ file_env() {
 }
 
 render() {
-  local template="$1" dest="$2" mode="${3:-0644}"
-  local vars
+  local template="$1" mode="${3:-0644}"
+  # Write through symlinks (e.g. /etc/freepbx.conf into the shared config volume).
+  local dest vars
+  dest="$(readlink -f "$2")"
   vars="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*\}' "$TEMPLATE_DIR/$template" | sort -u | tr -d '\n')"
   install -m "$mode" -o asterisk -g asterisk /dev/null "$dest"
   envsubst "$vars" <"$TEMPLATE_DIR/$template" >"$dest"
@@ -44,7 +46,8 @@ render odbc.ini.tmpl /etc/odbc.ini
 
 # The FreePBX installer writes the first freepbx.conf itself and treats one without
 # amportal.conf as a half-finished install, so only render it once installed.
-if [[ -n "$DB_PASSWORD" && -f /etc/amportal.conf ]]; then
+# Containers that mount the FreePBX config volume read-only (asterisk) only read it.
+if [[ -n "$DB_PASSWORD" && -f /etc/amportal.conf && -w "$(dirname "$(readlink -f /etc/freepbx.conf)")" ]]; then
   # Escape for a single-quoted PHP string.
   DB_PASSWORD_PHP="${DB_PASSWORD//\\/\\\\}"
   export DB_PASSWORD_PHP="${DB_PASSWORD_PHP//\'/\\\'}"
