@@ -13,6 +13,7 @@ x-db-env: &db-env
   DB_PASSWORD_FILE: /run/secrets/freepbxuser_password
   AMI_USER: freepbx-docker
   AMI_PASSWORD_FILE: /run/secrets/ami_password
+  SMTP_FROM: ${SMTP_FROM:-freepbx@freepbx.localdomain}
 
 x-freepbx-volumes: &freepbx-volumes
   - asterisk_etc:/etc/asterisk
@@ -34,6 +35,7 @@ volumes:
   freepbx_conf:
   freepbx_crontabs:
   freepbx_run:
+  smtp_spool:
 
 networks:
   defaultnet:
@@ -53,6 +55,8 @@ secrets:
     file: freepbxuser_password.txt
   ami_password:
     file: ami_password.txt
+  smtp_password:
+    file: smtp_password.txt
 
 services:
   db:
@@ -181,6 +185,43 @@ services:
     depends_on:
       freepbx-init:
         condition: service_completed_successfully
+
+  # FreePBX's crontab (fwconsole job --run: module security updates, etc.) and logrotate
+  cron:
+    restart: always
+    image: ${CRON_IMAGE:-ghcr.io/bchrobot/freepbx-docker/cron:latest}
+    build:
+      context: ./source
+      target: cron
+    network_mode: service:pbx-net
+    environment: *db-env
+    secrets:
+      - freepbxuser_password
+      - ami_password
+    volumes: *freepbx-volumes
+    depends_on:
+      freepbx-init:
+        condition: service_completed_successfully
+
+  # Send-only relay; the PBX containers hand mail to it with msmtp (sendmail).
+  smtp:
+    restart: always
+    image: ${SMTP_IMAGE:-ghcr.io/bchrobot/freepbx-docker/smtp:latest}
+    build:
+      context: ./source
+      target: smtp
+    environment:
+      RELAYHOST: ${SMTP_RELAYHOST:?set SMTP_RELAYHOST in .env, e.g. [smtp.gmail.com]:587}
+      RELAYHOST_USERNAME: ${SMTP_RELAY_USER:-}
+      RELAYHOST_PASSWORD_FILE: /run/secrets/smtp_password
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-freepbx.localdomain}
+      MYNETWORKS: 127.0.0.0/8 172.18.0.0/16
+    secrets:
+      - smtp_password
+    volumes:
+      - smtp_spool:/var/spool/postfix
+    networks:
+      defaultnet:
 
   fail2ban:
     restart: unless-stopped

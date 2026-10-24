@@ -1,0 +1,11 @@
+# Rendered by docker-entrypoint.sh. /usr/sbin/sendmail (msmtp) hands mail to the
+# smtp relay container, which queues and delivers it.
+defaults
+syslog off
+
+account default
+host ${SMTP_HOST}
+port ${SMTP_PORT}
+from ${SMTP_FROM}
+auth off
+tls off

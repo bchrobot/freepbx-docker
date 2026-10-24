@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs FreePBX's crontab (maintained by fwconsole in the shared crontabs volume) with
+# supercronic as the asterisk user, plus a daily logrotate.
+set -euo pipefail
+
+crontab_file=/var/spool/cron/crontabs/asterisk
+logrotate_job='@daily /usr/sbin/logrotate --state /var/lib/asterisk/logrotate.status /etc/freepbx-docker/logrotate.conf'
+
+# FreePBX only manages its own lines, so ours survives its updates.
+if ! crontab -u asterisk -l 2>/dev/null | grep -qF "$logrotate_job"; then
+  { crontab -u asterisk -l 2>/dev/null || true; echo "$logrotate_job"; } | crontab -u asterisk -
+fi
+
+exec setpriv --reuid=asterisk --regid=asterisk --init-groups \
+  supercronic -inotify "$crontab_file"

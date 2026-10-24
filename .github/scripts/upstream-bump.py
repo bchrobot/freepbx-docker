@@ -6,7 +6,7 @@ sources the image downloads directly. It rewrites the ARG lines in place and
 prints a summary line for the pull request title; opening the PR is left to the
 workflow.
 
-Usage: upstream-bump.py <asterisk|freepbx>
+Usage: upstream-bump.py <asterisk|freepbx|supercronic>
 """
 
 import hashlib
@@ -119,8 +119,29 @@ def bump_freepbx():
     return f"FreePBX {current_version} -> {version}"
 
 
+def bump_supercronic():
+    current = read_arg("SUPERCRONIC_VERSION")
+    release = json.loads(http_get("https://api.github.com/repos/aptible/supercronic/releases/latest"))
+    latest = release["tag_name"]
+    if version_key(latest.lstrip("v")) <= version_key(current.lstrip("v")):
+        print(f"supercronic: {current} is current")
+        return None
+
+    values = {"SUPERCRONIC_VERSION": latest}
+    for arch in ("amd64", "arm64"):
+        url = f"https://github.com/aptible/supercronic/releases/download/{latest}/supercronic-linux-{arch}"
+        values[f"SUPERCRONIC_SHA256_{arch.upper()}"] = hashlib.sha256(http_get(url)).hexdigest()
+        asset = next(a for a in release["assets"] if a["name"] == f"supercronic-linux-{arch}")
+        published = (asset.get("digest") or "").removeprefix("sha256:")
+        if published and published != values[f"SUPERCRONIC_SHA256_{arch.upper()}"]:
+            sys.exit(f"supercronic {latest} {arch}: GitHub asset digest does not match download")
+
+    write_args(values)
+    return f"supercronic {current} -> {latest}"
+
+
 def main():
-    bumpers = {"asterisk": bump_asterisk, "freepbx": bump_freepbx}
+    bumpers = {"asterisk": bump_asterisk, "freepbx": bump_freepbx, "supercronic": bump_supercronic}
     if len(sys.argv) != 2 or sys.argv[1] not in bumpers:
         sys.exit(f"usage: {sys.argv[0]} <{'|'.join(bumpers)}>")
     summary = bumpers[sys.argv[1]]()
