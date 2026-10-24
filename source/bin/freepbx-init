@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# One-shot FreePBX install/upgrade, run by the freepbx-init service before the
+# freepbx and cron containers start. Safe to run on every `docker compose up`.
+#
+# FreePBX state lives in two places that must agree: the database and the shared
+# volumes (webroot, amportal.conf). Install only when both are empty, upgrade when
+# both exist, and refuse to guess when they disagree.
+set -euo pipefail
+
+: "${DB_HOST:?}" "${DB_PORT:?}" "${DB_NAME:?}" "${DB_USER:?}" "${DB_PASSWORD:?}"
+export MYSQL_PWD="$DB_PASSWORD"
+
+# Called by path: /usr/sbin/fwconsole is only linked once FreePBX is installed.
+FWCONSOLE=/var/lib/asterisk/bin/fwconsole
+
+log() { echo "freepbx-init: $*"; }
+
+sql() {
+  mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -N -B -e "$1"
+}
+
+# Hold a DB advisory lock for the whole run so concurrent starts can't race.
+# The lock is released when this session (and so this script) exits.
+coproc LOCK { mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -N -B --unbuffered; }
+echo "SELECT GET_LOCK('freepbx_init', 1800);" >&"${LOCK[1]}"
+read -r got_lock <&"${LOCK[0]}"
+if [[ "$got_lock" != "1" ]]; then
+  log "could not acquire the freepbx_init lock" >&2
+  exit 1
+fi
+
+db_installed() {
+  [[ "$(sql "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = '$DB_NAME' AND table_name = 'freepbx_settings'")" != "0" ]]
+}
+
+install_complete() {
+  [[ "$(sql "SELECT COUNT(*) FROM \`$DB_NAME\`.modules
+             WHERE modulename IN ('framework', 'core') AND enabled = 1")" == "2" ]]
+}
+
+files_installed() {
+  [[ -f /var/www/html/admin/bootstrap.php && -f /etc/amportal.conf ]]
+}
+
+if ! db_installed && ! files_installed; then
+  log "new install"
+  cd /usr/local/src/freepbx
+  # The installer can exit non-zero after a successful install, so judge by state.
+  php install -n \
+    --dbhost="$DB_HOST" --dbport="$DB_PORT" --dbname="$DB_NAME" \
+    --cdrdbname="${CDR_DB_NAME:-asteriskcdrdb}" \
+    --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" \
+    --webroot=/var/www/html --user=asterisk --group=asterisk \
+    || log "installer exited with status $?; checking state"
+  if ! install_complete || ! files_installed; then
+    log "install did not complete" >&2
+    exit 1
+  fi
+elif db_installed && files_installed; then
+  if ! install_complete; then
+    log "a previous install did not complete; remove the database and volumes to retry" >&2
+    exit 1
+  fi
+  log "existing install found"
+  if [[ "${FREEPBX_AUTO_UPGRADE:-false}" == "true" ]]; then
+    log "upgrading modules"
+    "$FWCONSOLE" ma upgradeall || log "module upgrade reported errors"
+  fi
+else
+  if db_installed; then
+    log "the database has a FreePBX install but the volumes are empty" >&2
+  else
+    log "the volumes have a FreePBX install but the database is empty" >&2
+  fi
+  log "refusing to continue; restore both from a FreePBX backup or remove both" >&2
+  exit 1
+fi
+
+# Module security updates are applied by `fwconsole job --run` in the cron container.
+"$FWCONSOLE" updatemanager auto_module_security_updates enabled
+if [[ -n "${FREEPBX_NOTIFICATION_EMAIL:-}" ]]; then
+  "$FWCONSOLE" updatemanager notification_emails "$FREEPBX_NOTIFICATION_EMAIL"
+fi
+
+"$FWCONSOLE" chown
+# fwconsole chown does not follow the /etc/{freepbx,amportal}.conf symlinks
+chown -R asterisk:asterisk /var/lib/freepbx
+chmod 0640 /var/lib/freepbx/*.conf
+"$FWCONSOLE" reload
+log "done"

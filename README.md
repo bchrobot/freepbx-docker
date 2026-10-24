@@ -7,14 +7,14 @@ Upon starting this multi-container application, it will give you a turnkey PBX s
 * FreePBX 17.0.33
 * PHP 8.2.29
 * Asterisk 22.11.0 (LTS)
-* MariaDB 10.11.14
+* MariaDB 10.11.19
 * Fail2ban pre-configured with restrictive enforcement rules
 * Email notifications
 * Logrotate configured also for Asterisk and Freepbx
 * Supports data persistence
 * Base image Debian [debian:bookworm-slim](https://hub.docker.com/_/debian/)
 * Apache 2.4.65
-* NodeJS v18.20.4
+* Node.js 22 LTS
 * DAHDI channel not supported
 
 ### Ports
@@ -62,25 +62,23 @@ sudo sh -c 'iptables-save > /etc/iptables/rules.v4'
 printf "your-mysql-root-password" > mysql_root_password.txt
 printf "yourstrongmysqlfreepbxuserpassword" > freepbxuser_password.txt
 
-# for Postfix
-# run this command even if you don't need email notifications
-printf "[smtp-server-fqdn]:port your-email@gmail.com:your-app-password" > sasl_passwd.txt
+# for the Asterisk Manager Interface login used inside the stack
+openssl rand -hex 24 > ami_password.txt
 
 # Set proper file permissions
-chmod 600 mysql_root_password.txt freepbxuser_password.txt sasl_passwd.txt
+chmod 600 mysql_root_password.txt freepbxuser_password.txt ami_password.txt
 ```
+Passwords must not contain quote characters.
 
-2. To complete postfix configuration, set the `relayhost` in [postfix/main.cf](source/postfix/main.cf) to match your SMTP server defined in `sasl_passwd.txt`. 
-
-3. OPTION A: build the image locally:
+2. OPTION A: build the images locally:
 ```bash
-sudo docker compose build freepbx
+sudo docker compose build
 ```
-`source/Dockerfile` has several targets: `asterisk`, `freepbx`, and the legacy single-container `allinone` that compose currently uses. Builds work natively on both amd64 and arm64.
+`source/Dockerfile` has one target per service (`asterisk`, `freepbx`). Builds work natively on both amd64 and arm64.
 
-3. OPTION B: use the image published by CI to `ghcr.io/bchrobot/freepbx-docker/allinone:latest` (rebuilt weekly with the latest Debian security fixes). Set `FREEPBX_IMAGE` to use a different image, then jump to the next step
+2. OPTION B: use the images published by CI to `ghcr.io/bchrobot/freepbx-docker/{asterisk,freepbx}:latest` (rebuilt weekly with the latest Debian security fixes). Set `ASTERISK_IMAGE` / `FREEPBX_IMAGE` to use different images, then jump to the next step
 
-4. Configure RTP ports on the host and build + run the Compose project:
+3. Configure RTP ports on the host and build + run the Compose project. FreePBX is installed automatically on the first start (`freepbx-init`):
 ```bash
 sudo bash run.sh
 # If you want to override the default RTP port range (16384-32767):
@@ -88,18 +86,13 @@ sudo bash run.sh --rtp 10000-20000
 # NOTE
 # If you run the script with the default RTP range 16384-32767 and later rerun it with a different range, the iptables rules from the previous range remain in place and you have to delete those rules manually before or after applying the new range.
 
-# Install Freepbx
+# Re-run the install/upgrade step manually
 sudo bash run.sh --install-freepbx
 
 # Optional, clean up containers, network and volumes
 sudo bash run.sh --clean-all
 ```
 
-5. TLS support using Let's Encrypt DNS challenge
-```bash
-# Make sure to have both 80 and 443 TCP ports allowed by the firewall and a valid DNS record A
-sudo docker compose exec -it freepbx certbot --apache -d your.domain.com --email your-email@email.com --agree-tos --redirect -n
-```
 
 Login to the web server's admin URL and start configuring the system!
 

@@ -1,0 +1,130 @@
+#!/usr/bin/env php
+<?php
+// Stand-in for the `asterisk` binary in containers that do not run Asterisk.
+//
+// FreePBX shells out to `asterisk -rx '<command>'` and `asterisk -V` in a few places
+// (installer, fwconsole, logrotate). This runs those CLI commands over AMI against the
+// Asterisk container instead of its control socket. Credentials come from
+// /etc/freepbx-docker/ami.conf, written by docker-entrypoint.sh.
+
+const AMI_CONF = '/etc/freepbx-docker/ami.conf';
+
+function fail($message, $code = 1)
+{
+    fwrite(STDERR, "asterisk (AMI shim): $message\n");
+    exit($code);
+}
+
+function read_packet($sock)
+{
+    $packet = [];
+    while (($line = fgets($sock)) !== false) {
+        $line = rtrim($line, "\r\n");
+        if ($line === '') {
+            if ($packet) {
+                return $packet;
+            }
+            continue;
+        }
+        $packet[] = $line;
+    }
+    if ($packet) {
+        return $packet;
+    }
+    fail('connection closed by Asterisk');
+}
+
+function header_value($packet, $name)
+{
+    foreach ($packet as $line) {
+        if (stripos($line, "$name:") === 0) {
+            return trim(substr($line, strlen($name) + 1));
+        }
+    }
+    return null;
+}
+
+function send_action($sock, $fields)
+{
+    $out = '';
+    foreach ($fields as $key => $value) {
+        $out .= "$key: $value\r\n";
+    }
+    fwrite($sock, $out . "\r\n");
+}
+
+function ami_command($command)
+{
+    $conf = @parse_ini_file(AMI_CONF);
+    if (!$conf) {
+        fail('cannot read ' . AMI_CONF);
+    }
+    $sock = @stream_socket_client("tcp://{$conf['host']}:{$conf['port']}", $errno, $errstr, 5);
+    if (!$sock) {
+        fail("unable to connect to {$conf['host']}:{$conf['port']}: $errstr");
+    }
+    stream_set_timeout($sock, 30);
+    fgets($sock); // banner: "Asterisk Call Manager/x.y.z"
+
+    send_action($sock, [
+        'Action' => 'Login',
+        'Username' => $conf['user'],
+        'Secret' => $conf['secret'],
+        'Events' => 'off',
+    ]);
+    $login = read_packet($sock);
+    if (strcasecmp(header_value($login, 'Response') ?? '', 'Success') !== 0) {
+        fail('AMI login failed: ' . (header_value($login, 'Message') ?? 'unknown error'));
+    }
+
+    send_action($sock, ['Action' => 'Command', 'Command' => $command, 'ActionID' => 'shim']);
+    $response = read_packet($sock);
+    send_action($sock, ['Action' => 'Logoff']);
+    fclose($sock);
+
+    $output = [];
+    foreach ($response as $line) {
+        if (stripos($line, 'Output:') === 0) {
+            $output[] = ltrim(substr($line, 7));
+        }
+    }
+    $ok = in_array(strtolower(header_value($response, 'Response') ?? ''), ['success', 'follows'], true);
+    if (!$ok && !$output) {
+        $output[] = header_value($response, 'Message') ?? 'command failed';
+    }
+    return [$ok, $output];
+}
+
+// Accepts the forms FreePBX uses: -V, -rx CMD, -r -x CMD, -rvvvx CMD.
+$args = array_slice($argv, 1);
+$command = null;
+$version = false;
+for ($i = 0; $i < count($args); $i++) {
+    $arg = $args[$i];
+    if ($arg === '-V') {
+        $version = true;
+    } elseif ($arg[0] === '-' && strpos($arg, 'x') !== false) {
+        $command = $args[++$i] ?? fail('-x requires a command');
+    } elseif (preg_match('/^-[rvdq]+$/', $arg)) {
+        continue;
+    } else {
+        fail("unsupported argument '$arg' (only -V and -rx are available outside the asterisk container)", 2);
+    }
+}
+
+if ($version) {
+    [, $output] = ami_command('core show version');
+    if (!preg_match('/^(Asterisk \S+)/', $output[0] ?? '', $m)) {
+        fail('could not determine Asterisk version');
+    }
+    echo $m[1], "\n";
+    exit(0);
+}
+if ($command === null) {
+    fail('no command given; use -rx "<command>"', 2);
+}
+[$ok, $output] = ami_command($command);
+if ($output) {
+    echo implode("\n", $output), "\n";
+}
+exit($ok ? 0 : 1);

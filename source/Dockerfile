@@ -1,7 +1,6 @@
 # Targets:
 #   asterisk  - Asterisk only (runs FreePBX AGI scripts from the shared webroot)
-#   freepbx   - FreePBX web UI / fwconsole on Apache + mod_php
-#   allinone  - legacy single-container image (default; removed once compose is split)
+#   freepbx   - FreePBX web UI on Apache + mod_php; also runs freepbx-init
 #
 # Base images are written out literally (not via ARG) so Dependabot can update them.
 
@@ -80,7 +79,12 @@ RUN apt-get update \
   && groupadd --gid "${ASTERISK_GID}" asterisk \
   && useradd --system --uid "${ASTERISK_UID}" --gid asterisk --home-dir /var/lib/asterisk --no-create-home asterisk \
   && usermod -aG audio,dialout asterisk \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  # FreePBX's config files live in a volume shared by all containers
+  && install -d -o asterisk -g asterisk /var/lib/freepbx \
+  && ln -s /var/lib/freepbx/freepbx.conf /etc/freepbx.conf \
+  && ln -s /var/lib/freepbx/amportal.conf /etc/amportal.conf \
+  && mkdir -p /usr/local/lib/freepbx-docker/entrypoint.d
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY templates/ /usr/local/share/freepbx-docker/templates/
@@ -91,6 +95,7 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 FROM base AS asterisk
 
 COPY --from=asterisk-build /out/ /
+COPY entrypoint.d/10-ami-server.sh /usr/local/lib/freepbx-docker/entrypoint.d/
 
 RUN set -eux \
   && apt-get update \
@@ -120,6 +125,10 @@ ARG FREEPBX_MIRROR_REPO=bchrobot/freepbx-docker
 RUN apt-get update \
   && apt-get -y install --no-install-recommends \
     apache2 libapache2-mod-php8.2 mariadb-client lame ffmpeg sqlite3 \
+    # FreePBX verifies module signatures with gpg
+    gnupg \
+    # only for the crontab command; the cron container runs the schedule
+    cron \
   && rm -rf /var/lib/apt/lists/* \
   && sed -i 's/\(^upload_max_filesize = \).*/\120M/' /etc/php/8.2/apache2/php.ini \
   && sed -i 's/\(^memory_limit = \).*/\1256M/' /etc/php/8.2/apache2/php.ini \
@@ -128,7 +137,12 @@ RUN apt-get update \
   && echo "ServerName localhost" >> /etc/apache2/apache2.conf \
   && a2enmod rewrite \
   && apache2ctl -t \
-  && rm -f /var/www/html/index.html
+  && rm -f /var/www/html/index.html \
+  && ln -sf /dev/stdout /var/log/apache2/access.log \
+  && ln -sf /dev/stderr /var/log/apache2/error.log \
+  && ln -sf /dev/stdout /var/log/apache2/other_vhosts_access.log \
+  # fwconsole's reload lock; shared by the FreePBX containers, not by Asterisk
+  && install -d -o asterisk -g asterisk /run/asterisk
 
 # The FreePBX installer requires node, and its pm2/ucp modules use npm. Copied from
 # the official image so Dependabot tracks it (Debian's Node 18 is upstream-EOL).
@@ -137,6 +151,11 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
   && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
   && node --version && npm --version
+
+# No Asterisk binary here: `asterisk -rx` and `asterisk -V` go over AMI instead.
+COPY --chmod=0755 bin/asterisk-ami /usr/local/bin/asterisk
+COPY --chmod=0755 bin/freepbx-init bin/fastagi bin/apache2-foreground /usr/local/bin/
+COPY entrypoint.d/10-ami-client.sh /usr/local/lib/freepbx-docker/entrypoint.d/
 
 WORKDIR /usr/local/src
 
@@ -153,33 +172,4 @@ RUN set -eux \
   && tar -xzf freepbx.tgz \
   && rm freepbx.tgz
 
-CMD ["apache2ctl", "-D", "FOREGROUND"]
-
-# ---------------------------------------------------------------------------
-# Legacy single-container image: Asterisk, Apache, cron and Postfix in one container.
-FROM freepbx AS allinone
-
-COPY --from=asterisk-build /out/ /
-
-RUN set -eux \
-  && echo "postfix postfix/mailname string freepbx.localdomain" | debconf-set-selections \
-  && echo "postfix postfix/main_mailer_type string 'Internet Site'" | debconf-set-selections \
-  && apt-get update \
-  && xargs -a /asterisk-runtime-packages apt-get -y install --no-install-recommends \
-  && apt-get -y install --no-install-recommends \
-    cron postfix libsasl2-modules mailutils logrotate certbot python3-certbot-apache \
-  && rm -rf /var/lib/apt/lists/* \
-  && ldconfig \
-  && sed -i 's|^;runuser|runuser|; s|^;rungroup|rungroup|' /etc/asterisk/asterisk.conf \
-  && mkdir -p /var/run/asterisk \
-  && touch /var/log/asterisk/full \
-  && chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/log/asterisk \
-    /var/spool/asterisk /var/run/asterisk /usr/lib/asterisk
-
-COPY postfix/main.cf /etc/postfix/main.cf
-COPY logrotate/asterisk /etc/logrotate.d/asterisk
-COPY entrypoint.sh entrypoint.sh
-
-RUN sed -i "s|^smtp_sasl_password_maps.*|smtp_sasl_password_maps = texthash:/run/secrets/postfix_sasl_passwd|" /etc/postfix/main.cf
-
-CMD ["/usr/bin/env", "bash", "/usr/local/src/entrypoint.sh"]
+CMD ["apache2-foreground"]

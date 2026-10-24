@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# FreePBX core's FastAGI server (on a regular install, pm2 starts it). FreePBX 17
+# dialplan calls AGI(agi://127.0.0.1/...), which reaches this through the network
+# namespace shared with the asterisk container. AGI scripts run here, not in Asterisk.
+set -euo pipefail
+export ASTAGIDIR="${ASTAGIDIR:-/var/lib/asterisk/agi-bin}"
+exec setpriv --reuid=asterisk --regid=asterisk --init-groups \
+  node /var/www/html/admin/modules/core/node/fastagi-server.js

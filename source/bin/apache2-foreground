@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# apache2ctl stays in the foreground as a shell wrapper; exec Apache directly so it
+# receives the container's stop signal.
+set -eo pipefail
+source /etc/apache2/envvars
+set -u
+mkdir -p "$APACHE_RUN_DIR" "$APACHE_LOCK_DIR" "$APACHE_LOG_DIR"
+rm -f "$APACHE_PID_FILE"
+exec apache2 -D FOREGROUND "$@"

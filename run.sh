@@ -55,8 +55,9 @@ if [[ -n "$requested_rtp" ]]; then
 fi
 
 # INSTALL FREEPBX
+# freepbx-init installs (or upgrades) automatically on `docker compose up`; this re-runs it.
 if [[  "$*" == *"--install-freepbx"*  ]]; then
-    sudo docker compose exec -it -w /usr/local/src/freepbx freepbx php install -n --dbuser=freepbxuser --dbpass="$(cat freepbxuser_password.txt)" --dbhost=db
+    sudo docker compose run --rm freepbx-init
 
 # CLEAN
 elif [[  "$*" == *"--clean-all"*  ]]; then
@@ -65,13 +66,7 @@ elif [[  "$*" == *"--clean-all"*  ]]; then
     echo "Cleanup aborted."
     exit 0
   fi
-  sudo docker container stop freepbx-docker-db-1 && sudo docker container rm freepbx-docker-db-1
-  sudo docker container stop freepbx-docker-freepbx-1 && sudo docker container rm freepbx-docker-freepbx-1
-  sudo docker container stop fail2ban && sudo docker container rm fail2ban
-  sudo docker volume rm freepbx-docker_var_data
-  sudo docker volume rm freepbx-docker_etc_data
-  sudo docker volume rm freepbx-docker_mysql_data
-  sudo docker network rm freepbx-docker_defaultnet
+  sudo docker compose down --volumes --remove-orphans
 
 
 # UNSUPPORTED HOST CASE
@@ -102,12 +97,8 @@ else
             echo "Rule for Destination NAT RTP already in place."
         fi
 
-        # Build and start the Compose services
-        sudo docker compose up -d && {
-          printf "Waiting for database readiness"
-          for _ in $(seq 1 10); do printf "."; sleep 1; done
-          echo " done"
-        }
+        # Build and start the Compose services; freepbx-init installs FreePBX on first run
+        sudo docker compose up -d --wait
     fi
 
 fi
