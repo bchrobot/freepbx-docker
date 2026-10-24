@@ -1,0 +1,47 @@
+# Opens a PR when a pinned upstream source (not visible to Dependabot) has a new release.
+#
+# PRs opened with the default GITHUB_TOKEN do not trigger other workflows, so the
+# build check would not run on them. Add a fine-grained token with contents and
+# pull-requests write access as the BUMP_TOKEN secret to get CI on bump PRs.
+name: upstream-bump
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        dependency: [asterisk, freepbx]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: bump
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/upstream-bump.py ${{ matrix.dependency }}
+
+      - if: steps.bump.outputs.summary
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: upstream-bump/${{ matrix.dependency }}
+          delete-branch: true
+          commit-message: "chore(deps): bump ${{ steps.bump.outputs.summary }}"
+          title: "chore(deps): bump ${{ steps.bump.outputs.summary }}"
+          labels: dependencies
+          body: |
+            Automated bump from `.github/workflows/upstream-bump.yml`.
+
+            The new version and its sha256 were taken from the upstream release and verified against the downloaded file. Review the upstream changelog before merging.

@@ -4,9 +4,9 @@ This is MVP [Docker Compose](https://docs.docker.com/compose/) application for h
 
 Upon starting this multi-container application, it will give you a turnkey PBX system for SIP calling.
 
-* FreePBX 17.0.21
+* FreePBX 17.0.33
 * PHP 8.2.29
-* Asterisk 21.10.2
+* Asterisk 22.11.0 (LTS)
 * MariaDB 10.11.14
 * Fail2ban pre-configured with restrictive enforcement rules
 * Email notifications
@@ -106,6 +106,10 @@ Login to the web server's admin URL and start configuring the system!
 - **Dependabot** opens PRs for base images, compose images and GitHub Actions. All are pinned by tag and digest.
 - **CI** (`.github/workflows/build.yml`) scans every image with Trivy, uploads the results to the repository's Security tab, and attaches an SBOM.
 - **Weekly rebuild** (`.github/workflows/rebuild.yml`) rebuilds from scratch so Debian package fixes (PHP, Apache, ...) land. It republishes the image and opens a `security` issue if fixable HIGH/CRITICAL findings remain.
+- **Upstream bumps** (`.github/workflows/upstream-bump.yml`) open PRs for new Asterisk 22 LTS and FreePBX 17 releases, with verified checksums.
+- **Advisory watch** (`.github/workflows/advisory-watch.yml`) opens an issue for each new Asterisk or FreePBX security advisory.
+
+See [docs/supply-chain.md](docs/supply-chain.md) for what each mechanism covers and the known gaps.
 
 
 **If you find this project useful or inspiring**
