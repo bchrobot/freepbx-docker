@@ -4,12 +4,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /usr/src
 
-# Pinned sources versions (override with --build-arg for reproducible builds)
-ARG ASTERISK_VERSION=21.10.2
-ARG ASTERISK_VERSION_TAG=21.10.2
+# Pinned, checksummed upstream sources. Bumped by .github/workflows/upstream-bump.yml
+ARG ASTERISK_VERSION=22.11.0
+ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
+# Revision of svn.digium.com/svn/thirdparty/mp3/trunk, plus a hash of the exported tree
+ARG ASTERISK_MP3_REV=204
+ARG ASTERISK_MP3_TREE_SHA256=6a1952c9bf04e4ae3058ae50f193965dd59b69e52d5af86135c7c1a8e4d19fcb
 
-ARG FREEPBX_VERSION=17.0.21
-ARG FREEPBX_VERSION_TAG=17.0.2
+# Sangoma only publishes a mutable "latest" tarball, so the exact file is also mirrored
+# as a release asset of this repo; whichever source answers must match the checksum.
+ARG FREEPBX_VERSION=17.0.33
+ARG FREEPBX_SHA256=57bfe353de693cd9f0f03b4e6cda68da69fd39c4beb9506fc06c8814ec40e538
+ARG FREEPBX_MIRROR_REPO=bchrobot/freepbx-docker
 
 # Install requirements
 RUN apt-get update && apt-get -y install \
@@ -35,11 +41,14 @@ RUN apt-get update && apt-get -y install \
 
 # Download and build Asterisk directly in this stage
 RUN set -eux \
-  && AST_URL="https://github.com/escomputers/freepbx-docker/releases/download/v${ASTERISK_VERSION_TAG}/asterisk-${ASTERISK_VERSION}.tar.gz" \
-  && curl -fsSL "$AST_URL" -o asterisk.tar.gz \
+  && curl -fsSL "https://github.com/asterisk/asterisk/releases/download/${ASTERISK_VERSION}/asterisk-${ASTERISK_VERSION}.tar.gz" -o asterisk.tar.gz \
+  && echo "${ASTERISK_SHA256}  asterisk.tar.gz" | sha256sum -c - \
   && tar -xzf asterisk.tar.gz \
   && cd "asterisk-${ASTERISK_VERSION}" \
-  && contrib/scripts/get_mp3_source.sh \
+  && contrib/scripts/get_mp3_source.sh -r "${ASTERISK_MP3_REV}" \
+  && mp3_tree_sha256="$(cd addons/mp3 && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)" \
+  && echo "mp3 tree sha256: ${mp3_tree_sha256}" \
+  && test "${mp3_tree_sha256}" = "${ASTERISK_MP3_TREE_SHA256}" \
   && contrib/scripts/install_prereq install \
   && ./configure --libdir=/usr/lib64 --with-pjproject-bundled --with-jansson-bundled \
   && make menuselect.makeopts \
@@ -75,8 +84,15 @@ WORKDIR /usr/local/src
 
 # FreePBX source
 RUN set -eux \
-  && FREEPBX_URL="https://github.com/escomputers/freepbx-docker/releases/download/v${FREEPBX_VERSION_TAG}/freepbx-${FREEPBX_VERSION}.tgz" \
-  && curl -fsSL "$FREEPBX_URL" -o freepbx.tgz \
+  && for url in \
+       "https://github.com/${FREEPBX_MIRROR_REPO}/releases/download/freepbx-${FREEPBX_VERSION}/freepbx-${FREEPBX_VERSION}.tgz" \
+       "https://mirror.freepbx.org/modules/packages/freepbx/freepbx-17.0-latest.tgz"; do \
+       curl -fsSL --http1.1 "$url" -o freepbx.tgz \
+         && echo "${FREEPBX_SHA256}  freepbx.tgz" | sha256sum -c - \
+         && break; \
+       rm -f freepbx.tgz; \
+     done \
+  && test -f freepbx.tgz \
   && tar -xzf freepbx.tgz \
   && rm freepbx.tgz
 

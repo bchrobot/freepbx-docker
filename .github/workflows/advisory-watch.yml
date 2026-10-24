@@ -1,0 +1,70 @@
+# Opens an issue for each new security advisory published by Asterisk or FreePBX.
+# Neither is visible to Dependabot or to image scanners (Asterisk is built from
+# source; FreePBX modules are installed at runtime), so this is their CVE signal.
+name: advisory-watch
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      lookback-days:
+        description: Only report advisories published within this many days
+        default: "14"
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          LOOKBACK_DAYS: ${{ inputs.lookback-days || '14' }}
+        with:
+          script: |
+            const sources = ['asterisk/asterisk', 'FreePBX/security-reporting'];
+            const label = 'upstream-advisory';
+            const since = Date.now() - Number(process.env.LOOKBACK_DAYS) * 24 * 3600 * 1000;
+
+            const known = new Set();
+            for await (const { data } of github.paginate.iterator(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'all', labels: label, per_page: 100,
+            })) {
+              for (const issue of data) {
+                const id = issue.title.match(/GHSA-[\w-]+/);
+                if (id) known.add(id[0]);
+              }
+            }
+
+            for (const source of sources) {
+              const [owner, repo] = source.split('/');
+              const advisories = await github.paginate(github.rest.securityAdvisories.listRepositoryAdvisories, {
+                owner, repo, state: 'published', per_page: 100,
+              });
+              for (const a of advisories) {
+                if (known.has(a.ghsa_id) || Date.parse(a.published_at) < since) continue;
+                const affected = (a.vulnerabilities || [])
+                  .map((v) => `- \`${v.package?.name ?? 'unknown'}\`: affected \`${v.vulnerable_version_range ?? '?'}\`, patched \`${v.patched_versions ?? '?'}\``)
+                  .join('\n') || '- see advisory';
+                await github.rest.issues.create({
+                  ...context.repo,
+                  title: `[${source}] ${a.ghsa_id} (${a.severity ?? 'unknown'}): ${a.summary}`,
+                  labels: [label, 'security'],
+                  body: [
+                    `**Source:** ${a.html_url}`,
+                    `**CVE:** ${a.cve_id ?? 'n/a'}`,
+                    `**Published:** ${a.published_at}`,
+                    '',
+                    '**Affected:**',
+                    affected,
+                    '',
+                    'Check whether the pinned version in `source/Dockerfile` (Asterisk) or the installed FreePBX modules (`fwconsole ma list`) are affected.',
+                  ].join('\n'),
+                });
+                core.info(`opened issue for ${a.ghsa_id}`);
+              }
+            }
